@@ -127,6 +127,7 @@ func main() {
 			}
 
 			if reformat {
+				matter.Lastmod = lastmod
 				if force {
 					goto write
 				} else {
@@ -169,7 +170,7 @@ func getGitLastMod(path string) (time.Time, error) {
 }
 
 func getGitFileChanged(path string) (bool, error) {
-	cmd := exec.Command("git", "diff", "--cached", "--exit-code", "--no-patch", path)
+	cmd := exec.Command("git", "diff", "--exit-code", "--no-patch", "HEAD", "--", path)
 	cmd.Run()
 	return cmd.ProcessState.ExitCode() == 1, nil
 }
