@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,12 +17,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Matter struct {
-	Title   string    `yaml:"title,omitempty"`
-	Aliases []string  `yaml:"aliases,omitempty"`
-	Tags    []string  `yaml:"tags,omitempty"`
+type MatterIn struct {
+	Aliases []string `yaml:"aliases,omitempty"`
+	Tags    []string `yaml:"tags,omitempty"`
+	Publish bool     `yaml:"publish,omitempty"`
+}
+
+type MatterOut struct {
+	Title   string    `yaml:"title"`
+	Aliases []string  `yaml:"aliases"`
+	Tags    []string  `yaml:"tags"`
 	Lastmod time.Time `yaml:"lastmod"`
-	Draft   bool      `yaml:"draft"`
 }
 
 func main() {
@@ -31,20 +37,23 @@ func main() {
 		panic(err)
 	}
 
-	var path string
-	var force bool
-	var replaceTitle bool
-	var updateLastmod bool
-	var fixChtimeFromGit bool
-	var reformat bool
+	var target string
+	var force, quartz, fixChtimeFromGit, reformat, debug, clean bool
 
-	flag.StringVar(&path, "path", wd, "Content root path (=obsidian vault path).")
+	flag.StringVar(&target, "target", wd, "Path to write changed files to.")
 	flag.BoolVar(&force, "force", false, "Execute all changes without asking.")
-	flag.BoolVar(&replaceTitle, "title", false, "Replace frontmatter title with the file name.")
-	flag.BoolVar(&updateLastmod, "lastmod", true, "Update frontmatter lastmod with current time.")
+	flag.BoolVar(&debug, "debug", false, "Print extra information.")
+	flag.BoolVar(&clean, "clean", false, "Clean-up target dir.")
+	flag.BoolVar(&quartz, "quartz", false, "Prepare frontmatter for Quartz publishing.")
+	flag.BoolVar(&reformat, "reformat", false, "Replace frontmatter with this tool format and fix ending newline.")
 	flag.BoolVar(&fixChtimeFromGit, "git-chtime", false, "Change files chtime from git, useful right after git clone.")
-	flag.BoolVar(&reformat, "reformat", false, "Replace frontmatter with this tool format.")
 	flag.Parse()
+
+	if target != wd && clean {
+		if err := os.RemoveAll(target); err != nil {
+			panic(err)
+		}
+	}
 
 	inputs := make(chan bool)
 	go func() {
@@ -59,19 +68,17 @@ func main() {
 		}
 	}()
 
-	lastmod := time.Now().Truncate(time.Second)
-
 	if err := filepath.Walk(
 		wd,
-		func(path string, info fs.FileInfo, err error) error {
+		func(fpath string, info fs.FileInfo, err error) error {
 			if fixChtimeFromGit {
-				gitTime, err := getGitLastMod(path)
+				gitTime, err := getGitLastMod(fpath)
 				if err != nil {
 					return err
 				}
 				if !gitTime.IsZero() && !gitTime.Equal(info.ModTime()) {
 					fmt.Printf("Changing chtime: %s\n", info.Name())
-					return os.Chtimes(path, gitTime, gitTime)
+					return os.Chtimes(fpath, gitTime, gitTime)
 				}
 				return nil
 			}
@@ -82,75 +89,114 @@ func main() {
 			if !strings.HasSuffix(info.Name(), ".md") {
 				return nil
 			}
-			if strings.Contains(path, "templates/") {
-				return nil
+
+			contentPath := strings.TrimPrefix(fpath, wd)
+			if debug {
+				fmt.Printf("Processing file: %s\n", contentPath)
 			}
 
-			var fileChanged bool
-			title := strings.TrimSuffix(info.Name(), ".md")
-			matter, content, err := getFrontMatter(path)
+			matterIn, content, err := getFrontMatterIn(fpath)
 			if err != nil {
 				return err
 			}
 
-			if replaceTitle && matter.Title != title {
-				if force {
-					matter.Lastmod = lastmod
-					fileChanged = true
-				} else {
-					fmt.Printf("Do you want to change title: %s -> %s (y/n)? ", matter.Title, title)
-					if <-inputs {
-						matter.Title = title
-						fileChanged = true
+			var matter any
+			var always bool
+			if reformat {
+				if strings.Contains(fpath, "templates/") {
+					return nil
+				}
+				for i, tag := range matterIn.Tags {
+					if tag == "wip" {
+						matterIn.Tags[i] = "draft"
 					}
 				}
-			}
-			if updateLastmod {
-				changed, err := getGitFileChanged(path)
+				if len(matterIn.Tags) == 0 {
+					matterIn.Tags = append(matterIn.Tags, "draft")
+				}
+
+				matter = matterIn
+				if force {
+					goto compareAndWrite
+				} else {
+					fmt.Printf("Do you want to reformat file: %s (y/n)? ", contentPath)
+					if <-inputs {
+						goto compareAndWrite
+					}
+				}
+			} else if quartz {
+				if !matterIn.Publish {
+					fmt.Printf("Not publishing: %s\n", contentPath)
+					return nil
+				}
+				for _, tag := range matterIn.Tags {
+					if tag == "draft" {
+						fmt.Printf("Not publishing (due to draft tag): %s\n", contentPath)
+						return nil
+					}
+				}
+				// Fill Quartz-compatible frontmatter.
+				matterOut := MatterOut{
+					Title:   strings.TrimSuffix(info.Name(), ".md"),
+					Aliases: matterIn.Aliases,
+					Tags:    matterIn.Tags,
+				}
+				lastmod, err := getGitLastMod(fpath)
 				if err != nil {
 					return err
 				}
-				if changed {
-					if matter.Lastmod.IsZero() || !matter.Lastmod.Equal(lastmod) {
-						if force {
-							matter.Lastmod = lastmod
-							fileChanged = true
-						} else {
-							fmt.Printf("Do you want to update lastmod for: %s (y/n)? ", title)
-							if <-inputs {
-								matter.Lastmod = lastmod
-								fileChanged = true
-							}
-						}
-					}
+				matterOut.Lastmod = lastmod
+				if contentPath == "/_index.md" {
+					matterOut.Title = "Tikinang's 2nd 🧠"
 				}
-			}
 
-			if reformat {
-				matter.Lastmod = lastmod
+				matter = matterOut
+				always = true
 				if force {
-					goto write
+					goto compareAndWrite
 				} else {
-					fmt.Printf("Do you want to reformat file: %s (y/n)? ", title)
+					fmt.Printf("Do you want to Quartz fix file: %s (y/n)? ", contentPath)
 					if <-inputs {
-						goto write
+						goto compareAndWrite
 					}
 				}
-			}
-			if fileChanged {
-				goto write
 			}
 
 			return nil
 
-		write:
-			fmt.Printf("Writing file: %s\n", title)
+		compareAndWrite:
 			buf := bytes.NewBuffer(nil)
 			fmt.Fprintln(buf, "---")
 			yaml.NewEncoder(buf).Encode(matter)
 			fmt.Fprintln(buf, "---")
+			content = bytes.TrimSpace(content)
 			buf.Write(content)
-			return os.WriteFile(path, buf.Bytes(), info.Mode())
+			buf.WriteRune('\n')
+
+			original, err := os.ReadFile(fpath)
+			if err != nil {
+				return err
+			}
+
+			writeFpath := path.Join(target, contentPath)
+			writePath, _ := path.Split(writeFpath)
+			if err := os.MkdirAll(writePath, 509); err != nil {
+				return err
+			}
+
+			if bytes.Compare(buf.Bytes(), original) != 0 {
+				fmt.Printf("Writing changed file: %s\n", contentPath)
+				return os.WriteFile(writeFpath, buf.Bytes(), info.Mode())
+			}
+			if always {
+				fmt.Printf("Writing file with original content: %s\n", contentPath)
+				return os.WriteFile(writeFpath, original, info.Mode())
+			}
+			if debug {
+				fmt.Printf("Skipping file: %s\n", contentPath)
+			}
+
+			return nil
 		},
 	); err != nil {
 		panic(err)
@@ -169,23 +215,17 @@ func getGitLastMod(path string) (time.Time, error) {
 	return time.Parse("2006-01-02 15:04:05 -0700", string(b))
 }
 
-func getGitFileChanged(path string) (bool, error) {
-	cmd := exec.Command("git", "diff", "--exit-code", "--no-patch", "HEAD", "--", path)
-	cmd.Run()
-	return cmd.ProcessState.ExitCode() == 1, nil
-}
-
-func getFrontMatter(path string) (Matter, []byte, error) {
+func getFrontMatterIn(path string) (MatterIn, []byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return Matter{}, nil, err
+		return MatterIn{}, nil, err
 	}
 	defer f.Close()
 
-	var matter Matter
+	var matter MatterIn
 	rest, err := frontmatter.Parse(f, &matter)
 	if err != nil {
-		return Matter{}, nil, err
+		return MatterIn{}, nil, err
 	}
 
 	return matter, rest, nil
