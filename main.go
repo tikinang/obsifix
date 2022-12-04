@@ -42,10 +42,10 @@ func main() {
 
 	flag.StringVar(&target, "target", wd, "Path to write changed files to.")
 	flag.BoolVar(&force, "force", false, "Execute all changes without asking.")
-	flag.BoolVar(&debug, "debug", false, "Print extra information.")
-	flag.BoolVar(&clean, "clean", false, "Clean-up target dir.")
+	flag.BoolVar(&debug, "debug", false, "Print debug information.")
+	flag.BoolVar(&clean, "clean", false, "Remove all files and dirs from target, but only if target differs from working dir.")
 	flag.BoolVar(&quartz, "quartz", false, "Prepare frontmatter for Quartz publishing.")
-	flag.BoolVar(&reformat, "reformat", false, "Replace frontmatter with this tool format and fix ending newline.")
+	flag.BoolVar(&reformat, "reformat", false, "Replace frontmatter with this tool format and fix ending newlines.")
 	flag.BoolVar(&fixChtimeFromGit, "git-chtime", false, "Change files chtime from git, useful right after git clone.")
 	flag.Parse()
 
