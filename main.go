@@ -17,17 +17,43 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type Datetime struct {
+	time.Time
+}
+
+const datetimeFormat = "Monday, 2 January 2006 15:04:05"
+
+func (r *Datetime) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var buf string
+	err := unmarshal(&buf)
+	if err != nil {
+		return nil
+	}
+	tt, err := time.Parse(datetimeFormat, strings.TrimSpace(buf))
+	if err != nil {
+		r.Time = time.Time{}
+	}
+	r.Time = tt
+	return nil
+}
+
+func (r Datetime) MarshalYAML() (any, error) {
+	return r.Time.Format(datetimeFormat), nil
+}
+
 type MatterIn struct {
-	Tags    []string `yaml:"tags"`
+	Created Datetime `yaml:"created"`
+	Tags    []string `yaml:"tags,omitempty"`
 	Aliases []string `yaml:"aliases,omitempty"`
 	Publish bool     `yaml:"publish,omitempty"`
 }
 
 type MatterOut struct {
+	Created time.Time `yaml:"created"`
+	Lastmod time.Time `yaml:"lastmod"`
 	Title   string    `yaml:"title"`
 	Tags    []string  `yaml:"tags"`
 	Aliases []string  `yaml:"aliases"`
-	Lastmod time.Time `yaml:"lastmod"`
 }
 
 func main() {
@@ -91,6 +117,14 @@ func main() {
 			}
 
 			contentPath := strings.TrimPrefix(fpath, wd)
+			if reformat {
+				if !strings.Contains(contentPath, "/forest") && contentPath != "/_index.md" {
+					if debug {
+						fmt.Printf("Skipping processing file: %s\n", contentPath)
+					}
+					return nil
+				}
+			}
 			if debug {
 				fmt.Printf("Processing file: %s\n", contentPath)
 			}
@@ -103,17 +137,16 @@ func main() {
 			var matter any
 			var always bool
 			if reformat {
-				if strings.Contains(fpath, "templates/") {
-					return nil
-				}
 				for i, tag := range matterIn.Tags {
 					if tag == "wip" {
 						matterIn.Tags[i] = "draft"
 					}
 				}
-				if len(matterIn.Tags) == 0 {
-					matterIn.Tags = append(matterIn.Tags, "draft")
+				created, err := getGitCreated(fpath)
+				if err != nil {
+					return err
 				}
+				matterIn.Created = Datetime{created}
 
 				matter = matterIn
 				if force {
@@ -141,6 +174,13 @@ func main() {
 					Aliases: matterIn.Aliases,
 					Tags:    matterIn.Tags,
 				}
+				if matterIn.Created.IsZero() {
+					created, err := getGitCreated(fpath)
+					if err != nil {
+						return err
+					}
+					matterOut.Created = created
+				}
 				lastmod, err := getGitLastMod(fpath)
 				if err != nil {
 					return err
@@ -167,7 +207,9 @@ func main() {
 		compareAndWrite:
 			buf := bytes.NewBuffer(nil)
 			fmt.Fprintln(buf, "---")
-			yaml.NewEncoder(buf).Encode(matter)
+			if err := yaml.NewEncoder(buf).Encode(matter); err != nil {
+				panic(err)
+			}
 			fmt.Fprintln(buf, "---")
 			content = bytes.TrimSpace(content)
 			buf.Write(content)
@@ -193,7 +235,7 @@ func main() {
 				return os.WriteFile(writeFpath, original, info.Mode())
 			}
 			if debug {
-				fmt.Printf("Skipping file: %s\n", contentPath)
+				fmt.Printf("Skipping writing file: %s\n", contentPath)
 			}
 
 			return nil
@@ -205,14 +247,26 @@ func main() {
 
 func getGitLastMod(path string) (time.Time, error) {
 	cmd := exec.Command("git", "log", "-1", "--pretty=format:%ci", path)
-	b, err := cmd.CombinedOutput()
+	b, err := cmd.Output()
 	if err != nil {
 		return time.Time{}, err
 	}
 	if len(b) == 0 {
 		return time.Time{}, nil
 	}
-	return time.Parse("2006-01-02 15:04:05 -0700", string(b))
+	return time.Parse("2006-01-02 15:04:05 -0700", strings.TrimSpace(string(b)))
+}
+
+func getGitCreated(path string) (time.Time, error) {
+	cmd := exec.Command("git", "log", "--diff-filter=A", "--follow", "--format=%ci", "-1", "--", path)
+	b, err := cmd.Output()
+	if err != nil {
+		return time.Time{}, err
+	}
+	if len(b) == 0 {
+		return time.Time{}, nil
+	}
+	return time.Parse("2006-01-02 15:04:05 -0700", strings.TrimSpace(string(b)))
 }
 
 func getFrontMatterIn(path string) (MatterIn, []byte, error) {
