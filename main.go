@@ -18,15 +18,15 @@ import (
 )
 
 type MatterIn struct {
+	Tags    []string `yaml:"tags"`
 	Aliases []string `yaml:"aliases,omitempty"`
-	Tags    []string `yaml:"tags,omitempty"`
 	Publish bool     `yaml:"publish,omitempty"`
 }
 
 type MatterOut struct {
 	Title   string    `yaml:"title"`
-	Aliases []string  `yaml:"aliases"`
 	Tags    []string  `yaml:"tags"`
+	Aliases []string  `yaml:"aliases"`
 	Lastmod time.Time `yaml:"lastmod"`
 }
 
@@ -147,7 +147,7 @@ func main() {
 				}
 				matterOut.Lastmod = lastmod
 				if contentPath == "/_index.md" {
-					matterOut.Title = "Tikinang's 2nd 🧠"
+					matterOut.Title = "Index"
 				}
 
 				matter = matterOut
