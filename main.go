@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -117,13 +118,15 @@ func main() {
 			}
 
 			contentPath := strings.TrimPrefix(fpath, wd)
-			if reformat {
-				if !strings.Contains(contentPath, "/forest") && contentPath != "/_index.md" {
-					if debug {
-						fmt.Printf("Skipping processing file: %s\n", contentPath)
-					}
-					return nil
+			if strings.HasPrefix(contentPath, "/templates") {
+				if debug {
+					fmt.Printf("Skipping processing file: %s\n", contentPath)
 				}
+				return nil
+			}
+			if strings.HasPrefix(contentPath, "/assets") {
+				fmt.Printf("Copying file: %s\n", contentPath)
+				return copy(fpath, path.Join(target, contentPath))
 			}
 			if debug {
 				fmt.Printf("Processing file: %s\n", contentPath)
@@ -174,13 +177,11 @@ func main() {
 					Aliases: matterIn.Aliases,
 					Tags:    matterIn.Tags,
 				}
-				if matterIn.Created.IsZero() {
-					created, err := getGitCreated(fpath)
-					if err != nil {
-						return err
-					}
-					matterOut.Created = created
+				created, err := getGitCreated(fpath)
+				if err != nil {
+					return err
 				}
+				matterOut.Created = created
 				lastmod, err := getGitLastMod(fpath)
 				if err != nil {
 					return err
@@ -208,7 +209,7 @@ func main() {
 			buf := bytes.NewBuffer(nil)
 			fmt.Fprintln(buf, "---")
 			if err := yaml.NewEncoder(buf).Encode(matter); err != nil {
-				panic(err)
+				return err
 			}
 			fmt.Fprintln(buf, "---")
 			content = bytes.TrimSpace(content)
@@ -255,6 +256,24 @@ func getGitLastMod(path string) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return time.Parse("2006-01-02 15:04:05 -0700", strings.TrimSpace(string(b)))
+}
+
+func copy(source, target string) error {
+	f1, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer f1.Close()
+
+	f2, err := os.Create(target)
+	if err != nil {
+		return err
+	}
+	defer f2.Close()
+
+	io.Copy(f2, f1)
+
+	return nil
 }
 
 func getGitCreated(path string) (time.Time, error) {
