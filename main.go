@@ -113,20 +113,21 @@ func main() {
 			if info.IsDir() {
 				return nil
 			}
-			if !strings.HasSuffix(info.Name(), ".md") {
-				return nil
-			}
 
 			contentPath := strings.TrimPrefix(fpath, wd)
 			if strings.HasPrefix(contentPath, "/templates") {
 				if debug {
-					fmt.Printf("Skipping processing file: %s\n", contentPath)
+					fmt.Printf("Skipping processing file (template): %s\n", contentPath)
 				}
 				return nil
 			}
 			if strings.HasPrefix(contentPath, "/assets") {
 				fmt.Printf("Copying file: %s\n", contentPath)
-				return copy(fpath, path.Join(target, contentPath))
+				return copyFile(fpath, path.Join(target, contentPath))
+			}
+
+			if !strings.HasSuffix(info.Name(), ".md") {
+				return nil
 			}
 			if debug {
 				fmt.Printf("Processing file: %s\n", contentPath)
@@ -258,14 +259,20 @@ func getGitLastMod(path string) (time.Time, error) {
 	return time.Parse("2006-01-02 15:04:05 -0700", strings.TrimSpace(string(b)))
 }
 
-func copy(source, target string) error {
-	f1, err := os.Open(source)
+func copyFile(src, dst string) error {
+
+	writePath, _ := path.Split(dst)
+	if err := os.MkdirAll(writePath, 509); err != nil {
+		return err
+	}
+
+	f1, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer f1.Close()
 
-	f2, err := os.Create(target)
+	f2, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
